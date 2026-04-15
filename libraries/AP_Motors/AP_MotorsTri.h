@@ -8,7 +8,6 @@
 
 #include <AP_Common/AP_Common.h>
 #include <AP_Math/AP_Math.h>        // ArduPilot Mega Vector/Matrix math Library
-#include <AP_Param/AP_Param.h>
 #include "AP_MotorsMulticopter.h"
 
 // tail servo uses channel 7
@@ -25,7 +24,6 @@ public:
     AP_MotorsTri(uint16_t speed_hz = AP_MOTORS_SPEED_DEFAULT) :
         AP_MotorsMulticopter(speed_hz)
     {
-        AP_Param::setup_object_defaults(this, var_info);
     };
 
     // init
@@ -60,9 +58,6 @@ public:
     // Run arming checks
     bool arming_checks(size_t buflen, char *buffer) const override;
 
-    // var_info for holding Parameter information
-    static const struct AP_Param::GroupInfo var_info[];
-
     // Get the testing order for the motors, this is used for AP_Motors_test
     uint8_t get_motor_test_order(uint8_t i);
 
@@ -72,7 +67,6 @@ protected:
 
     // call vehicle supplied thrust compensation if set
     void                thrust_compensation(void) override;
-    void                apply_tip_jet_modulation();
 
     const char* _get_frame_string() const override { return "TRI"; }
     const char*  get_type_string() const override { return _pitch_reversed ? "pitch-reversed" : ""; }
@@ -92,14 +86,6 @@ protected:
     // reverse pitch
     bool _pitch_reversed;
     bool _have_tail_servo;
-
-    AP_Int8 _tj_enable;
-    AP_Float _tj_amplitude;
-    AP_Float _tj_limit;
-    AP_Float _tj_phase1_deg;
-    AP_Float _tj_phase2_deg;
-    AP_Float _tj_phase3_deg;
-    bool _tj_phase_valid;
 };
 
 #endif  // AP_MOTORS_TRI_ENABLED

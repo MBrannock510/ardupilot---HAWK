@@ -19,72 +19,14 @@
 
 #include <AP_HAL/AP_HAL.h>
 #include <AP_Vehicle/AP_Vehicle_Type.h>
-#include <AP_RotorPhase/AP_RotorPhase.h>
 
 #include <AP_Math/AP_Math.h>
-#include <AP_Logger/AP_Logger.h>
 #include <GCS_MAVLink/GCS.h>
 #include <SRV_Channel/SRV_Channel.h>
 
 #include "AP_MotorsTri.h"
 
 extern const AP_HAL::HAL& hal;
-
-const AP_Param::GroupInfo AP_MotorsTri::var_info[] = {
-    AP_NESTEDGROUPINFO(AP_MotorsMulticopter, 0),
-
-    // @Param: TJ_EN
-    // @DisplayName: Tip-jet modulation enable
-    // @Description: Enable rotor-phase tip-jet thrust modulation for tricopters.
-    // @Values: 0:Disabled,1:Enabled
-    // @User: Advanced
-    AP_GROUPINFO("TJ_EN", 1, AP_MotorsTri, _tj_enable, 0),
-
-    // @Param: TJ_AMP
-    // @DisplayName: Tip-jet modulation amplitude
-    // @Description: Maximum additive thrust modulation amplitude applied to each tip motor.
-    // @Range: 0 0.3
-    // @Increment: 0.01
-    // @User: Advanced
-    AP_GROUPINFO("TJ_AMP", 2, AP_MotorsTri, _tj_amplitude, 0.0f),
-
-    // @Param: TJ_LIM
-    // @DisplayName: Tip-jet modulation clamp
-    // @Description: Maximum absolute modulation term added to each tip motor.
-    // @Range: 0 0.5
-    // @Increment: 0.01
-    // @User: Advanced
-    AP_GROUPINFO("TJ_LIM", 3, AP_MotorsTri, _tj_limit, 0.05f),
-
-    // @Param: TJ_P1
-    // @DisplayName: Tip-jet phase offset motor1
-    // @Description: Phase offset in degrees for motor1 modulation.
-    // @Range: -180 180
-    // @Units: deg
-    // @Increment: 1
-    // @User: Advanced
-    AP_GROUPINFO("TJ_P1", 4, AP_MotorsTri, _tj_phase1_deg, 0.0f),
-
-    // @Param: TJ_P2
-    // @DisplayName: Tip-jet phase offset motor2
-    // @Description: Phase offset in degrees for motor2 modulation.
-    // @Range: -180 180
-    // @Units: deg
-    // @Increment: 1
-    // @User: Advanced
-    AP_GROUPINFO("TJ_P2", 5, AP_MotorsTri, _tj_phase2_deg, 120.0f),
-
-    // @Param: TJ_P3
-    // @DisplayName: Tip-jet phase offset motor4
-    // @Description: Phase offset in degrees for motor4 modulation.
-    // @Range: -180 180
-    // @Units: deg
-    // @Increment: 1
-    // @User: Advanced
-    AP_GROUPINFO("TJ_P3", 6, AP_MotorsTri, _tj_phase3_deg, -120.0f),
-
-    AP_GROUPEND
-};
 
 // init
 void AP_MotorsTri::init(motor_frame_class frame_class, motor_frame_type frame_type)
@@ -408,58 +350,6 @@ void AP_MotorsTri::thrust_compensation(void)
         _thrust_left = thrust[1];
         _thrust_rear = thrust[3];
     }
-
-    apply_tip_jet_modulation();
-}
-
-void AP_MotorsTri::apply_tip_jet_modulation()
-{
-    _tj_phase_valid = false;
-
-    if (_tj_enable <= 0) {
-        return;
-    }
-
-    AP_RotorPhase *rotor_phase = AP::rotor_phase();
-    if (rotor_phase == nullptr) {
-        return;
-    }
-
-    rotor_phase->update();
-
-    float theta_rad = 0.0f;
-    float rate_rps = 0.0f;
-    if (!rotor_phase->get_estimate(theta_rad, rate_rps)) {
-        return;
-    }
-
-    const float rp_demand = constrain_float(safe_sqrt(sq(_roll_in) + sq(_pitch_in)), 0.0f, 1.0f);
-    const float amp = constrain_float(_tj_amplitude, 0.0f, 0.3f) * rp_demand;
-    if (is_zero(amp)) {
-        return;
-    }
-
-    const float clamp = MAX(constrain_float(_tj_limit, 0.0f, 0.5f), amp);
-    const float d_right = constrain_float(amp * sinf(theta_rad + radians(_tj_phase1_deg)), -clamp, clamp);
-    const float d_left = constrain_float(amp * sinf(theta_rad + radians(_tj_phase2_deg)), -clamp, clamp);
-    const float d_rear = constrain_float(amp * sinf(theta_rad + radians(_tj_phase3_deg)), -clamp, clamp);
-
-    _thrust_right = constrain_float(_thrust_right + d_right, 0.0f, 1.0f);
-    _thrust_left = constrain_float(_thrust_left + d_left, 0.0f, 1.0f);
-    _thrust_rear = constrain_float(_thrust_rear + d_rear, 0.0f, 1.0f);
-    _tj_phase_valid = true;
-
-#if HAL_LOGGING_ENABLED
-    AP::logger().Write("TJET", "TimeUS,Valid,Theta,RPS,Amp,MR,ML,M4", "QBffffff",
-                       AP_HAL::micros64(),
-                       uint8_t(_tj_phase_valid),
-                       theta_rad,
-                       rate_rps,
-                       amp,
-                       _thrust_right,
-                       _thrust_left,
-                       _thrust_rear);
-#endif
 }
 
 /*
