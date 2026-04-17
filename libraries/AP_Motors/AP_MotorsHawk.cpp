@@ -231,7 +231,7 @@ bool AP_MotorsHawk::arming_checks(size_t buflen, char *buffer) const
 
 bool AP_MotorsHawk::motor_test_checks(size_t buflen, char *buffer) const
 {
-    if (!arming_checks(buflen, buffer)) {
+    if (!AP_MotorsMulticopter::motor_test_checks(buflen, buffer)) {
         return false;
     }
     return true;
