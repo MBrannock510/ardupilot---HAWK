@@ -121,6 +121,7 @@ const AP_Param::GroupInfo AP_MotorsHawk::var_info[] = {
 AP_MotorsHawk::AP_MotorsHawk(uint16_t speed_hz) :
     AP_MotorsMulticopter(speed_hz),
     _encoders_initialized(false),
+    _frame_configured(false),
     _last_debug_ms(0),
     _last_fault_ms(0),
     _sent_init_msg(false),
@@ -171,17 +172,25 @@ void AP_MotorsHawk::set_frame_class_and_type(motor_frame_class frame_class,
 {
     (void)frame_type;
 
+    if (frame_class != MOTOR_FRAME_HAWK) {
+        if (_frame_configured) {
+            send_debug_text(MAV_SEVERITY_WARNING,
+                            "HAWK wrong frame class=%u",
+                            (unsigned)frame_class);
+        }
+        _frame_configured = false;
+        _encoders_initialized = false;
+        return;
+    }
+
+    if (_frame_configured && _encoders_initialized) {
+        return;
+    }
+
     _encoders_initialized = false;
 
     for (uint8_t i = 0; i < AP_MOTORS_MAX_NUM_MOTORS; i++) {
         motor_enabled[i] = false;
-    }
-
-    if (frame_class != MOTOR_FRAME_HAWK) {
-        send_debug_text(MAV_SEVERITY_WARNING,
-                        "HAWK wrong frame class=%u",
-                        (unsigned)frame_class);
-        return;
     }
 
     add_motor_num(AP_MOTORS_MOT_1);
@@ -194,6 +203,7 @@ void AP_MotorsHawk::set_frame_class_and_type(motor_frame_class frame_class,
 
     _encoders.init();
     _encoders_initialized = true;
+    _frame_configured = true;
 
     send_debug_text(MAV_SEVERITY_INFO, "HAWK frame configured");
 }
@@ -221,7 +231,7 @@ bool AP_MotorsHawk::arming_checks(size_t buflen, char *buffer) const
 
 bool AP_MotorsHawk::motor_test_checks(size_t buflen, char *buffer) const
 {
-    if (!arming_checks(buflen, buffer)) {
+    if (!AP_MotorsMulticopter::motor_test_checks(buflen, buffer)) {
         return false;
     }
     return true;
