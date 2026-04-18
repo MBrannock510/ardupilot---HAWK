@@ -10,7 +10,7 @@ class VehicleInfo(object):
         """
         self.options = {
     "ArduCopter": {
-        "default_frame": "quad",
+        "default_frame": "hawk",
         "frames": {
             # COPTER
             "+": {
@@ -243,6 +243,14 @@ class VehicleInfo(object):
                     "default_params/copter.parm",
                     "default_params/copter-X.parm",
                     "models/freestyle.param",
+                ],
+            },
+            "hawk": {
+                "model": "quad",
+                "waf_target": "bin/arducopter",
+                "default_params_filename": [
+                    "default_params/copter.parm",
+                    "default_params/copter-hawk.parm",
                 ],
             },
         },
@@ -570,6 +578,5 @@ class VehicleInfo(object):
             ret["waf_target"] = opts.build_target
 
         return ret
-
 
 
