@@ -1,6 +1,7 @@
 #include "AP_MotorsHawk.h"
 
 #include <AP_HAL/AP_HAL.h>
+#include <AP_HAL/AP_HAL_Boards.h>
 #include <AP_Math/AP_Math.h>
 #include <GCS_MAVLink/GCS.h>
 #include <stdarg.h>
@@ -115,6 +116,17 @@ const AP_Param::GroupInfo AP_MotorsHawk::var_info[] = {
     // @User: Advanced
     AP_GROUPINFO("H_YB3", 14, AP_MotorsHawk, _yaw_bias[2], -0.5f),
 
+    // @Param: H_SITL_EN
+    // @DisplayName: HAWK SITL encoder simulation
+    // @Description: Enables synthetic encoder angles in SITL so HAWK can arm and run without physical encoders
+    // @Values: 0:Disabled,1:Enabled
+    // @User: Advanced
+#if CONFIG_HAL_BOARD == HAL_BOARD_SITL
+    AP_GROUPINFO("H_SITL_EN", 15, AP_MotorsHawk, _sitl_enc_enable, 1),
+#else
+    AP_GROUPINFO("H_SITL_EN", 15, AP_MotorsHawk, _sitl_enc_enable, 0),
+#endif
+
     AP_GROUPEND
 };
 
@@ -155,7 +167,8 @@ void AP_MotorsHawk::init(motor_frame_class frame_class,
 {
     set_frame_class_and_type(frame_class, frame_type);
 
-    const bool ok = (frame_class == MOTOR_FRAME_HAWK) && _encoders_initialized;
+    const bool ok = (frame_class == MOTOR_FRAME_HAWK) &&
+                    (_encoders_initialized || use_encoder_simulation());
     set_initialised_ok(ok);
 
     if (!_sent_init_msg) {
@@ -214,9 +227,13 @@ bool AP_MotorsHawk::arming_checks(size_t buflen, char *buffer) const
         return false;
     }
 
-    if (!_encoders_initialized) {
+    if (!_encoders_initialized && !use_encoder_simulation()) {
         hal.util->snprintf(buffer, buflen, "HAWK encoders not initialized");
         return false;
+    }
+
+    if (use_encoder_simulation()) {
+        return true;
     }
 
     for (uint8_t i = 0; i < HAWK_NUM_MOTORS; i++) {
@@ -244,6 +261,17 @@ uint32_t AP_MotorsHawk::get_motor_mask()
 
 void AP_MotorsHawk::update_encoder_state()
 {
+    if (use_encoder_simulation()) {
+        const float theta0 = wrap_2PI(0.00003f * (float)AP_HAL::micros());
+        _theta_rad[0] = theta0;
+        _theta_rad[1] = wrap_2PI(theta0 + radians(120.0f));
+        _theta_rad[2] = wrap_2PI(theta0 + radians(240.0f));
+        for (uint8_t i = 0; i < HAWK_NUM_MOTORS; i++) {
+            _encoder_healthy[i] = true;
+        }
+        return;
+    }
+
     if (!_encoders_initialized) {
         for (uint8_t i = 0; i < HAWK_NUM_MOTORS; i++) {
             _encoder_healthy[i] = false;
@@ -263,6 +291,15 @@ void AP_MotorsHawk::update_encoder_state()
             _theta_rad[i] = _encoders.get_angle_rad(i);
         }
     }
+}
+
+bool AP_MotorsHawk::use_encoder_simulation() const
+{
+#if CONFIG_HAL_BOARD == HAL_BOARD_SITL
+    return _sitl_enc_enable > 0;
+#else
+    return false;
+#endif
 }
 
 bool AP_MotorsHawk::encoders_healthy() const
@@ -322,6 +359,10 @@ void AP_MotorsHawk::set_actuator_safe()
 
 void AP_MotorsHawk::send_encoder_debug_if_due()
 {
+    if (!armed()) {
+        return;
+    }
+
     const uint32_t now = AP_HAL::millis();
     if (now - _last_debug_ms < 1000) {
         return;
@@ -344,6 +385,11 @@ void AP_MotorsHawk::send_encoder_debug_if_due()
 
 void AP_MotorsHawk::send_encoder_fault_if_needed()
 {
+    if (!armed()) {
+        _had_encoder_fault = false;
+        return;
+    }
+
     const bool bad = !encoders_healthy();
     const uint32_t now = AP_HAL::millis();
 
