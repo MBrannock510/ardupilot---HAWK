@@ -49,10 +49,15 @@ protected:
     void send_encoder_debug_if_due();
     void send_encoder_fault_if_needed();
     bool use_encoder_simulation() const;
+    bool rotor_timing_ready() const;
+    bool rotor_timing_ready(uint32_t now_us) const;
+    void update_rotation_period(float theta_rad, uint32_t sample_time_us);
+    float compute_predicted_theta(uint32_t now_us) const;
 
 private:
     static constexpr uint8_t HAWK_NUM_MOTORS = 3;
     static constexpr uint32_t ENCODER_TIMEOUT_US = 20000U; // 20 ms
+    static constexpr uint8_t ROTATION_HISTORY_LEN = 10;
 
     enum MotorIndex : uint8_t {
         MOTOR_HAWK_1 = 0,
@@ -79,6 +84,14 @@ private:
 
     bool _encoders_initialized;
     bool _frame_configured;
+    float _last_measured_theta_rad;
+    float _avg_rotation_period_us;
+    float _rotation_period_history_us[ROTATION_HISTORY_LEN];
+    uint32_t _last_rotation_tick_us;
+    uint8_t _rotation_history_count;
+    uint8_t _rotation_history_index;
+    bool _rotation_tick_valid;
+    bool _theta_sample_valid;
 
     // debug state
     uint32_t _last_debug_ms;
