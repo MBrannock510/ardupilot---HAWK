@@ -48,6 +48,7 @@ protected:
     void send_debug_text(MAV_SEVERITY severity, const char *fmt, ...) const;
     void send_encoder_debug_if_due();
     void send_encoder_fault_if_needed();
+    bool use_encoder_simulation() const;
 
 private:
     static constexpr uint8_t HAWK_NUM_MOTORS = 3;
@@ -70,12 +71,14 @@ private:
     AP_Float _yaw_gain;
     AP_Float _collective_gain;
     AP_Float _cyclic_max;
+    AP_Int8 _sitl_enc_enable;
 
     AP_Float _phase_roll_deg[HAWK_NUM_MOTORS];
     AP_Float _phase_pitch_deg[HAWK_NUM_MOTORS];
     AP_Float _yaw_bias[HAWK_NUM_MOTORS];
 
     bool _encoders_initialized;
+    bool _frame_configured;
 
     // debug state
     uint32_t _last_debug_ms;

@@ -1,0 +1,38 @@
+# HAWK rough SITL model (3-rotor fixed-pitch platform)
+{
+    # total vehicle mass in kg (rough initial estimate)
+    "mass" : 2.2,
+
+    # approximate motor-to-motor diagonal in meters
+    "diagonal_size" : 0.62,
+
+    # reference conditions for drag estimation
+    "refSpd" : 10.0,      # m/s
+    "refAngle" : 25.0,    # deg
+    "refVoltage" : 24.0,  # V
+    "refCurrent" : 15.0,  # A
+    "refAlt" : 100.0,     # m AMSL
+    "refTempC" : 25.0,    # C
+    "refBatRes" : 0.03,
+
+    # battery model
+    "maxVoltage" : 25.2,
+    "battCapacityAh" : 0,
+
+    # motor model
+    "propExpo" : 0.60,
+    "refRotRate" : 150,
+    "hoverThrOut" : 0.45,
+    "pwmMin" : 1000,
+    "pwmMax" : 2000,
+    "spin_min" : 0.12,
+    "spin_max" : 0.95,
+    "slew_max" : 0,
+
+    # effective rotor disk area (3 x ~15in props)
+    "disc_area" : 0.34,
+    "mdrag_coef" : 0.10,
+
+    # three motor outputs used by HAWK backend
+    "num_motors" : 3
+}
