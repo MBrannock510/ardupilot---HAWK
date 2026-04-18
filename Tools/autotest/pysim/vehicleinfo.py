@@ -246,7 +246,7 @@ class VehicleInfo(object):
                 ],
             },
             "hawk": {
-                "model": "quad",
+                "model": "tri:@ROMFS/models/hawk.json",
                 "waf_target": "bin/arducopter",
                 "default_params_filename": [
                     "default_params/copter.parm",
@@ -578,5 +578,4 @@ class VehicleInfo(object):
             ret["waf_target"] = opts.build_target
 
         return ret
-
 
