@@ -8,11 +8,10 @@
 class AP_HawkEncoder
 {
 public:
-    static constexpr uint8_t NUM_ENCODERS = 3;
+    static constexpr uint8_t NUM_ENCODERS = 1;
 
     AP_HawkEncoder() :
-        _initialized(false),
-        _use_mux(false)
+        _initialized(false)
     {
         for (uint8_t i = 0; i < NUM_ENCODERS; i++) {
             _state[i].raw_angle = 0;
@@ -30,15 +29,6 @@ public:
         if ((bool)_dev) {
             _dev->set_retries(3);
         }
-
-        if (USE_TCA9548A) {
-            _mux = AP_HAL::get_HAL().i2c_mgr->get_device(I2C_BUS, TCA9548A_ADDR);
-            if ((bool)_mux) {
-                _mux->set_retries(3);
-            }
-        }
-
-        _use_mux = USE_TCA9548A && (bool)_mux;
         _initialized = (bool)_dev;
 
         if (!_initialized) {
@@ -56,22 +46,14 @@ public:
             }
             return;
         }
-
-        if (!_use_mux) {
-            if (!read_one(0)) {
-                mark_unhealthy(0);
-            }
-            for (uint8_t i = 1; i < NUM_ENCODERS; i++) {
-                mark_unhealthy(i);
-            }
-            return;
+        if (!read_one(0)) {
+            mark_unhealthy(0);
         }
+    }
 
-        for (uint8_t i = 0; i < NUM_ENCODERS; i++) {
-            if (!read_one(i)) {
-                mark_unhealthy(i);
-            }
-        }
+    bool initialized() const
+    {
+        return _initialized;
     }
 
     bool healthy(uint8_t idx) const
@@ -123,9 +105,6 @@ private:
     static constexpr uint8_t AS5600_ADDR = 0x36;
     static constexpr uint8_t AS5600_RAW_ANGLE = 0x0C;
 
-    static constexpr bool USE_TCA9548A = true;
-    static constexpr uint8_t TCA9548A_ADDR = 0x70;
-
     struct EncoderState {
         uint16_t raw_angle;
         float angle_rad;
@@ -134,43 +113,13 @@ private:
     };
 
     AP_HAL::OwnPtr<AP_HAL::I2CDevice> _dev;
-    AP_HAL::OwnPtr<AP_HAL::I2CDevice> _mux;
 
     EncoderState _state[NUM_ENCODERS];
     bool _initialized;
-    bool _use_mux;
-
-    bool select_mux_channel(uint8_t chan)
-    {
-        if (!_use_mux) {
-            return true;
-        }
-
-        if (!(bool)_mux || chan > 7) {
-            return false;
-        }
-
-        WITH_SEMAPHORE(_mux->get_semaphore());
-
-        uint8_t value = (1U << chan);
-        return _mux->transfer(&value, 1, nullptr, 0);
-    }
 
     bool read_one(uint8_t idx)
     {
         if (idx >= NUM_ENCODERS || !(bool)_dev) {
-            return false;
-        }
-
-        if (!_use_mux && idx > 0) {
-            return false;
-        }
-
-        if (_use_mux && !(bool)_mux) {
-            return false;
-        }
-
-        if (!select_mux_channel(idx)) {
             return false;
         }
 

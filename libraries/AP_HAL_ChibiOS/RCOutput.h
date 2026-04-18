@@ -22,6 +22,7 @@
 #include <AP_ESC_Telem/AP_ESC_Telem.h>
 
 #include "shared_dma.h"
+#include "RCOutput_PCA9685.h"
 
 #if HAL_USE_PWM == TRUE
 
@@ -556,6 +557,7 @@ private:
 
     // total number of channels on FMU
     uint8_t num_fmu_channels;
+    uint32_t native_chan_mask = 0;
 
     // number of active fmu channels
     uint8_t active_fmu_channels;
@@ -598,6 +600,21 @@ private:
     virtual_timer_t _dshot_rate_timer;
     // force triggering of groups, this is used by the rate thread to ensure output occurs
     bool force_trigger;
+
+#if HAL_USE_I2C == TRUE && defined(HAL_PCA9685_RCOUT_ENABLED) && HAL_PCA9685_RCOUT_ENABLED
+    RCOutput_PCA9685 pca9685;
+    uint16_t pca9685_rate_hz = 50;
+
+    bool pca9685_active() const { return pca9685.available(); }
+    bool is_native_local_channel(uint8_t local_chan) const { return (native_chan_mask & (1U << local_chan)) != 0; }
+    int8_t pca9685_channel_index(uint8_t local_chan) const;
+    bool is_pca9685_channel(uint8_t local_chan) const { return pca9685_channel_index(local_chan) >= 0; }
+    uint32_t pca9685_local_mask() const;
+    void push_pca9685();
+#else
+    bool pca9685_active() const { return false; }
+    bool is_native_local_channel(uint8_t local_chan) const { return true; }
+#endif
 
 #if HAL_DSHOT_ENABLED
     // dshot commands

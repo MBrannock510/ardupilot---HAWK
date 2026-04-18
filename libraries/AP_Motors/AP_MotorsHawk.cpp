@@ -2,7 +2,11 @@
 
 #include <AP_HAL/AP_HAL.h>
 #include <AP_HAL/AP_HAL_Boards.h>
+#include <AP_BattMonitor/AP_BattMonitor.h>
+#include <AP_GPS/AP_GPS.h>
+#include <AP_Logger/AP_Logger.h>
 #include <AP_Math/AP_Math.h>
+#include <AP_RSSI/AP_RSSI.h>
 #include <GCS_MAVLink/GCS.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -116,17 +120,6 @@ const AP_Param::GroupInfo AP_MotorsHawk::var_info[] = {
     // @User: Advanced
     AP_GROUPINFO("H_YB3", 14, AP_MotorsHawk, _yaw_bias[2], -0.5f),
 
-    // @Param: H_SITL_EN
-    // @DisplayName: HAWK SITL encoder simulation
-    // @Description: Enables synthetic encoder angles in SITL so HAWK can arm and run without physical encoders
-    // @Values: 0:Disabled,1:Enabled
-    // @User: Advanced
-#if CONFIG_HAL_BOARD == HAL_BOARD_SITL
-    AP_GROUPINFO("H_SITL_EN", 15, AP_MotorsHawk, _sitl_enc_enable, 1),
-#else
-    AP_GROUPINFO("H_SITL_EN", 15, AP_MotorsHawk, _sitl_enc_enable, 0),
-#endif
-
     AP_GROUPEND
 };
 
@@ -143,14 +136,24 @@ AP_MotorsHawk::AP_MotorsHawk(uint16_t speed_hz) :
     _theta_sample_valid(false),
     _last_debug_ms(0),
     _last_fault_ms(0),
+    _last_status_ms(0),
+    _last_command_log_ms(0),
     _sent_init_msg(false),
-    _had_encoder_fault(false)
+    _had_encoder_fault(false),
+    _last_armed_state(false),
+    _last_spool_state(SpoolState::SHUT_DOWN),
+    _last_pivot_target_rad(0.0f),
+    _last_pivot_pwm(HAWK_PIVOT_PWM_TRIM),
+    _last_logged_roll_in(0.0f),
+    _last_logged_pitch_in(0.0f),
+    _last_logged_yaw_in(0.0f),
+    _last_logged_throttle_in(0.0f)
 {
     for (uint8_t i = 0; i < HAWK_NUM_MOTORS; i++) {
         _theta_rad[i] = 0.0f;
-        _encoder_healthy[i] = false;
         _hawk_out[i] = 0.0f;
     }
+    _encoder_healthy = false;
     for (uint8_t i = 0; i < ROTATION_HISTORY_LEN; i++) {
         _rotation_period_history_us[i] = 0.0f;
     }
@@ -178,7 +181,8 @@ void AP_MotorsHawk::init(motor_frame_class frame_class,
     set_frame_class_and_type(frame_class, frame_type);
 
     const bool ok = (frame_class == MOTOR_FRAME_HAWK) &&
-                    (_encoders_initialized || use_encoder_simulation());
+                    _encoders_initialized &&
+                    SRV_Channels::function_assigned(HAWK_PIVOT_FUNCTION);
     set_initialised_ok(ok);
 
     if (!_sent_init_msg) {
@@ -219,21 +223,40 @@ void AP_MotorsHawk::set_frame_class_and_type(motor_frame_class frame_class,
     add_motor_num(AP_MOTORS_MOT_1);
     add_motor_num(AP_MOTORS_MOT_2);
     add_motor_num(AP_MOTORS_MOT_3);
+    SRV_Channels::set_aux_channel_default(HAWK_PIVOT_FUNCTION, HAWK_PIVOT_CH);
 
     motor_enabled[MOTOR_HAWK_1] = true;
     motor_enabled[MOTOR_HAWK_2] = true;
     motor_enabled[MOTOR_HAWK_3] = true;
 
+    configure_hardcoded_defaults();
     _encoders.init();
-    _encoders_initialized = true;
+    _encoders_initialized = _encoders.initialized();
     _frame_configured = true;
     _rotation_history_count = 0;
     _rotation_history_index = 0;
     _avg_rotation_period_us = 0.0f;
     _rotation_tick_valid = false;
     _theta_sample_valid = false;
+    _encoder_healthy = false;
+    _last_pivot_target_rad = 0.0f;
+    _last_pivot_pwm = HAWK_PIVOT_PWM_TRIM;
+    _last_armed_state = armed();
+    _last_spool_state = _spool_state;
+
+    rc_set_freq((1U << AP_MOTORS_MOT_1) |
+                (1U << AP_MOTORS_MOT_2) |
+                (1U << AP_MOTORS_MOT_3),
+                _speed_hz);
+    SRV_Channels::set_rc_frequency(HAWK_PIVOT_FUNCTION, 50);
+    SRV_Channels::set_angle(HAWK_PIVOT_FUNCTION, 1);
 
     send_debug_text(MAV_SEVERITY_INFO, "HAWK frame configured");
+    if (_encoders_initialized) {
+        send_debug_text(MAV_SEVERITY_INFO, "HAWK encoder ready bus=0 addr=0x36");
+    } else {
+        send_debug_text(MAV_SEVERITY_ERROR, "HAWK encoder init failed bus=0 addr=0x36");
+    }
 }
 
 bool AP_MotorsHawk::arming_checks(size_t buflen, char *buffer) const
@@ -242,16 +265,17 @@ bool AP_MotorsHawk::arming_checks(size_t buflen, char *buffer) const
         return false;
     }
 
-    if (!_encoders_initialized && !use_encoder_simulation()) {
+    if (!_encoders_initialized) {
         hal.util->snprintf(buffer, buflen, "HAWK encoders not initialized");
         return false;
     }
 
-    if (use_encoder_simulation()) {
-        return true;
+    if (!SRV_Channels::function_assigned(HAWK_PIVOT_FUNCTION)) {
+        hal.util->snprintf(buffer, buflen, "HAWK pivot servo missing on S4");
+        return false;
     }
 
-    if (!_encoder_healthy[0]) {
+    if (!_encoder_healthy) {
         hal.util->snprintf(buffer, buflen, "HAWK rotor encoder invalid");
         return false;
     }
@@ -274,28 +298,16 @@ bool AP_MotorsHawk::motor_test_checks(size_t buflen, char *buffer) const
 
 uint32_t AP_MotorsHawk::get_motor_mask()
 {
-    return (1U << 0) | (1U << 1) | (1U << 2);
+    return (1U << AP_MOTORS_MOT_1) |
+           (1U << AP_MOTORS_MOT_2) |
+           (1U << AP_MOTORS_MOT_3) |
+           SRV_Channels::get_output_channel_mask(HAWK_PIVOT_FUNCTION);
 }
 
 void AP_MotorsHawk::update_encoder_state()
 {
-    if (use_encoder_simulation()) {
-        const float theta0 = wrap_2PI(0.00003f * (float)AP_HAL::micros());
-        _theta_rad[0] = theta0;
-        _theta_rad[1] = wrap_2PI(theta0 + radians(120.0f));
-        _theta_rad[2] = wrap_2PI(theta0 + radians(240.0f));
-        for (uint8_t i = 0; i < HAWK_NUM_MOTORS; i++) {
-            _encoder_healthy[i] = true;
-        }
-        _rotation_history_count = ROTATION_HISTORY_LEN;
-        _avg_rotation_period_us = 30000.0f;
-        return;
-    }
-
     if (!_encoders_initialized) {
-        for (uint8_t i = 0; i < HAWK_NUM_MOTORS; i++) {
-            _encoder_healthy[i] = false;
-        }
+        _encoder_healthy = false;
         _theta_sample_valid = false;
         return;
     }
@@ -305,33 +317,21 @@ void AP_MotorsHawk::update_encoder_state()
 
     const bool good = _encoders.healthy(0) &&
                       !_encoders.stale(0, ENCODER_TIMEOUT_US);
-
-    for (uint8_t i = 0; i < HAWK_NUM_MOTORS; i++) {
-        _encoder_healthy[i] = (i == 0) ? good : false;
-    }
+    _encoder_healthy = good;
 
     if (good) {
         const float theta = _encoders.get_angle_rad(0);
         update_rotation_period(theta, now_us);
         const float theta_to_use = rotor_timing_ready(now_us) ? compute_predicted_theta(now_us) : theta;
         for (uint8_t i = 0; i < HAWK_NUM_MOTORS; i++) {
-            _theta_rad[i] = theta_to_use;
+            _theta_rad[i] = wrap_2PI(theta_to_use + radians(120.0f * i));
         }
     }
 }
 
-bool AP_MotorsHawk::use_encoder_simulation() const
-{
-#if CONFIG_HAL_BOARD == HAL_BOARD_SITL
-    return _sitl_enc_enable > 0;
-#else
-    return false;
-#endif
-}
-
 bool AP_MotorsHawk::encoders_healthy() const
 {
-    return _encoder_healthy[0];
+    return _encoder_healthy;
 }
 
 bool AP_MotorsHawk::rotor_timing_ready() const
@@ -448,27 +448,87 @@ void AP_MotorsHawk::set_actuator_safe()
     }
 }
 
-void AP_MotorsHawk::send_encoder_debug_if_due()
+void AP_MotorsHawk::set_pivot_servo_safe()
 {
-    if (!armed()) {
+    _last_pivot_pwm = HAWK_PIVOT_PWM_TRIM;
+    SRV_Channels::set_output_pwm_trimmed(HAWK_PIVOT_FUNCTION, HAWK_PIVOT_PWM_TRIM);
+}
+
+void AP_MotorsHawk::configure_hardcoded_defaults()
+{
+    AP_Param::set_default_by_name("SERVO1_FUNCTION", SRV_Channel::k_motor1);
+    AP_Param::set_default_by_name("SERVO2_FUNCTION", SRV_Channel::k_motor2);
+    AP_Param::set_default_by_name("SERVO3_FUNCTION", SRV_Channel::k_motor3);
+    AP_Param::set_default_by_name("SERVO4_FUNCTION", HAWK_PIVOT_FUNCTION);
+    AP_Param::set_default_by_name("SERVO4_MIN", HAWK_PIVOT_PWM_MIN);
+    AP_Param::set_default_by_name("SERVO4_TRIM", HAWK_PIVOT_PWM_TRIM);
+    AP_Param::set_default_by_name("SERVO4_MAX", HAWK_PIVOT_PWM_MAX);
+    AP_Param::set_default_by_name("MOT_THST_HOVER", 0.35f);
+    AP_Param::set_default_by_name("MOT_THST_EXPO", 0.65f);
+}
+
+void AP_MotorsHawk::update_pivot_servo(float theta_rad,
+                                       float roll_in,
+                                       float pitch_in)
+{
+    if (!SRV_Channels::function_assigned(HAWK_PIVOT_FUNCTION)) {
         return;
     }
 
+    if (!is_zero(roll_in) || !is_zero(pitch_in)) {
+        _last_pivot_target_rad = wrap_2PI(atan2f(pitch_in, roll_in));
+    }
+
+    const float phase_error = wrap_PI(_last_pivot_target_rad - theta_rad);
+    const float drive = constrain_float(phase_error * HAWK_PIVOT_PHASE_GAIN, -1.0f, 1.0f);
+    const int16_t pwm = HAWK_PIVOT_PWM_TRIM + (int16_t)(drive * HAWK_PIVOT_PWM_SPAN);
+    _last_pivot_pwm = pwm;
+    SRV_Channels::set_output_pwm_trimmed(HAWK_PIVOT_FUNCTION, pwm);
+}
+
+void AP_MotorsHawk::send_state_change_debug_if_needed()
+{
+    const bool armed_now = armed();
+    if (armed_now != _last_armed_state) {
+        send_debug_text(MAV_SEVERITY_INFO, "HAWK armed=%u", (unsigned)armed_now);
+        _last_armed_state = armed_now;
+    }
+
+    if (_spool_state != _last_spool_state) {
+        send_debug_text(MAV_SEVERITY_INFO,
+                        "HAWK spool=%u desired=%u",
+                        (unsigned)_spool_state,
+                        (unsigned)_spool_desired);
+        _last_spool_state = _spool_state;
+    }
+}
+
+void AP_MotorsHawk::send_status_debug_if_due()
+{
     const uint32_t now = AP_HAL::millis();
-    if (now - _last_debug_ms < 1000) {
+    if (now - _last_debug_ms < 30000) {
         return;
     }
     _last_debug_ms = now;
 
-    const float d1 = degrees(_theta_rad[0]);
+    AP_BattMonitor &battery = AP::battery();
+    float current_amps = 0.0f;
+    const bool have_current = battery.current_amps(current_amps);
+    const AP_GPS &gps = AP::gps();
+    AP_RSSI *rssi_backend = AP::rssi();
+    const float receiver_rssi = (rssi_backend != nullptr) ? rssi_backend->read_receiver_rssi() : -1.0f;
 
     send_debug_text(MAV_SEVERITY_INFO,
-                    "HAWK ENC h=%u t=%u a=%.1f T=%.2fms n=%u",
-                    (unsigned)_encoder_healthy[0],
+                    "HAWK st arm=%u sp=%u enc=%u tim=%u gps=%u sat=%u V=%.2f I=%.1f rssi=%.2f",
+                    (unsigned)armed(),
+                    (unsigned)_spool_state,
+                    (unsigned)_encoder_healthy,
                     (unsigned)rotor_timing_ready(),
-                    (double)d1,
-                    (double)(_avg_rotation_period_us * 0.001f),
-                    (unsigned)_rotation_history_count);
+                    (unsigned)gps.status(),
+                    (unsigned)gps.num_sats(),
+                    (double)battery.voltage(),
+                    (double)(have_current ? current_amps : -1.0f),
+                    (double)receiver_rssi);
 }
 
 void AP_MotorsHawk::send_encoder_fault_if_needed()
@@ -485,7 +545,7 @@ void AP_MotorsHawk::send_encoder_fault_if_needed()
         if (!_had_encoder_fault || (now - _last_fault_ms) > 2000) {
             send_debug_text(MAV_SEVERITY_WARNING,
                             "HAWK encoder/timing fault h=%u t=%u",
-                            (unsigned)_encoder_healthy[0],
+                            (unsigned)_encoder_healthy,
                             (unsigned)rotor_timing_ready());
             _last_fault_ms = now;
             _had_encoder_fault = true;
@@ -496,14 +556,91 @@ void AP_MotorsHawk::send_encoder_fault_if_needed()
     }
 }
 
+void AP_MotorsHawk::log_status_if_due()
+{
+#if HAL_LOGGING_ENABLED
+    const uint32_t now_ms = AP_HAL::millis();
+    if (now_ms - _last_status_ms < 30000) {
+        return;
+    }
+
+    AP_BattMonitor &battery = AP::battery();
+    float current_amps = 0.0f;
+    const bool have_current = battery.current_amps(current_amps);
+    const AP_GPS &gps = AP::gps();
+    AP_RSSI *rssi_backend = AP::rssi();
+    const float receiver_rssi = (rssi_backend != nullptr) ? rssi_backend->read_receiver_rssi() : -1.0f;
+
+    AP::logger().WriteStreaming("HWKS",
+                                "TimeUS,Arm,Spool,EncOk,TimOk,GPS,Sats,BatV,BatI,RSSI,Tms,Theta,PPWM",
+                                "QBBBBBBfffffh",
+                                AP_HAL::micros64(),
+                                (uint8_t)armed(),
+                                (uint8_t)_spool_state,
+                                (uint8_t)_encoder_healthy,
+                                (uint8_t)rotor_timing_ready(),
+                                (uint8_t)gps.status(),
+                                (uint8_t)gps.num_sats(),
+                                battery.voltage(),
+                                have_current ? current_amps : -1.0f,
+                                receiver_rssi,
+                                _avg_rotation_period_us * 0.001f,
+                                degrees(_theta_rad[0]),
+                                _last_pivot_pwm);
+
+    _last_status_ms = now_ms;
+#endif
+}
+
+void AP_MotorsHawk::log_command_if_needed()
+{
+#if HAL_LOGGING_ENABLED
+    const uint32_t now_ms = AP_HAL::millis();
+    const bool due = (now_ms - _last_command_log_ms) > 5000U;
+    const bool changed =
+        (fabsf(_roll_in - _last_logged_roll_in) > 0.05f) ||
+        (fabsf(_pitch_in - _last_logged_pitch_in) > 0.05f) ||
+        (fabsf(_yaw_in - _last_logged_yaw_in) > 0.05f) ||
+        (fabsf(_throttle_in - _last_logged_throttle_in) > 0.05f);
+
+    if (!due && !changed) {
+        return;
+    }
+
+    AP::logger().WriteStreaming("HWKC",
+                                "TimeUS,Roll,Pitch,Yaw,Thr,Col,Out1,Out2,Out3,PTgt,PPWM",
+                                "Qfffffffffh",
+                                AP_HAL::micros64(),
+                                _roll_in,
+                                _pitch_in,
+                                _yaw_in,
+                                _throttle_in,
+                                compute_collective_thrust(_throttle_in),
+                                _hawk_out[0],
+                                _hawk_out[1],
+                                _hawk_out[2],
+                                degrees(_last_pivot_target_rad),
+                                _last_pivot_pwm);
+
+    _last_command_log_ms = now_ms;
+    _last_logged_roll_in = _roll_in;
+    _last_logged_pitch_in = _pitch_in;
+    _last_logged_yaw_in = _yaw_in;
+    _last_logged_throttle_in = _throttle_in;
+#endif
+}
+
 void AP_MotorsHawk::output_armed_stabilizing()
 {
     update_encoder_state();
+    send_state_change_debug_if_needed();
     send_encoder_fault_if_needed();
-    send_encoder_debug_if_due();
+    send_status_debug_if_due();
+    log_status_if_due();
 
     if (!encoders_healthy() || !rotor_timing_ready()) {
         set_actuator_safe();
+        set_pivot_servo_safe();
 
         limit.roll = true;
         limit.pitch = true;
@@ -541,6 +678,9 @@ void AP_MotorsHawk::output_armed_stabilizing()
         }
     }
 
+    update_pivot_servo(_theta_rad[0], roll_in, pitch_in);
+    log_command_if_needed();
+
     limit.roll = hit_upper || hit_lower;
     limit.pitch = hit_upper || hit_lower;
     limit.yaw = hit_upper || hit_lower;
@@ -550,9 +690,14 @@ void AP_MotorsHawk::output_armed_stabilizing()
 
 void AP_MotorsHawk::output_to_motors()
 {
+    send_state_change_debug_if_needed();
+    send_status_debug_if_due();
+    log_status_if_due();
+
     switch (_spool_state) {
     case SpoolState::SHUT_DOWN:
         set_actuator_safe();
+        set_pivot_servo_safe();
         break;
 
     case SpoolState::GROUND_IDLE: {
@@ -560,6 +705,7 @@ void AP_MotorsHawk::output_to_motors()
         for (uint8_t i = 0; i < HAWK_NUM_MOTORS; i++) {
             _hawk_out[i] = idle;
         }
+        set_pivot_servo_safe();
         break;
     }
 
@@ -578,10 +724,17 @@ void AP_MotorsHawk::output_to_motors()
 
 void AP_MotorsHawk::_output_test_seq(uint8_t motor_seq, int16_t pwm)
 {
-    if (motor_seq < 1 || motor_seq > HAWK_NUM_MOTORS) {
+    if (motor_seq < 1 || motor_seq > (HAWK_NUM_MOTORS + 1U)) {
         return;
     }
 
     const uint8_t motor_idx = motor_seq - 1;
-    rc_write(motor_idx, pwm);
+    if (motor_idx < HAWK_NUM_MOTORS) {
+        rc_write(motor_idx, pwm);
+        return;
+    }
+    if (motor_seq == (HAWK_NUM_MOTORS + 1U)) {
+        SRV_Channels::set_output_pwm_trimmed(HAWK_PIVOT_FUNCTION, pwm);
+    }
+    send_debug_text(MAV_SEVERITY_INFO, "HAWK test seq=%u pwm=%d", (unsigned)motor_seq, (int)pwm);
 }

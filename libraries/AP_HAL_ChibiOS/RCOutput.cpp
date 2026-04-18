@@ -136,6 +136,7 @@ void RCOutput::init()
             if (group.chan[j] != CHAN_DISABLED) {
                 num_fmu_channels = MAX(num_fmu_channels, group.chan[j]+1);
                 group.ch_mask |= (1U<<group.chan[j]);
+                native_chan_mask |= (1U<<group.chan[j]);
             }
 #ifdef HAL_WITH_BIDIR_DSHOT
             group.bdshot.telem_tim_ch[j] = CHAN_DISABLED;
@@ -147,6 +148,10 @@ void RCOutput::init()
         }
         chVTObjectInit(&group.dma_timeout);
     }
+
+#if HAL_USE_I2C == TRUE && defined(HAL_PCA9685_RCOUT_ENABLED) && HAL_PCA9685_RCOUT_ENABLED
+    pca9685.init(HAL_PCA9685_RCOUT_I2C_BUS, HAL_PCA9685_RCOUT_I2C_ADDR);
+#endif
 
 #if HAL_WITH_IO_MCU
     if (iomcu_enabled) {
@@ -470,6 +475,14 @@ void RCOutput::set_freq(uint32_t chmask, uint16_t freq_hz)
         return;
     }
 
+#if HAL_USE_I2C == TRUE && defined(HAL_PCA9685_RCOUT_ENABLED) && HAL_PCA9685_RCOUT_ENABLED
+    const uint32_t pca_mask = chmask & pca9685_local_mask();
+    if (pca_mask != 0 && pca9685_active()) {
+        pca9685_rate_hz = constrain_int16(freq_hz, 24, 400);
+        pca9685.set_freq(pca9685_rate_hz);
+    }
+#endif
+
     /*
       we enable the new frequency on all groups that have one
       of the requested channels. This means we may enable high
@@ -515,6 +528,13 @@ void RCOutput::set_default_rate(uint16_t freq_hz)
             pwmChangePeriod(group.pwm_drv, group.pwm_cfg.period);
         }
     }
+
+#if HAL_USE_I2C == TRUE && defined(HAL_PCA9685_RCOUT_ENABLED) && HAL_PCA9685_RCOUT_ENABLED
+    if (pca9685_active()) {
+        pca9685_rate_hz = constrain_int16(freq_hz, 24, 400);
+        pca9685.set_freq(pca9685_rate_hz);
+    }
+#endif
 }
 
 /*
@@ -670,6 +690,14 @@ uint16_t RCOutput::get_freq(uint8_t chan)
     if (grp) {
         return grp->pwm_drv->config->frequency / grp->pwm_drv->period;
     }
+#if HAL_USE_I2C == TRUE && defined(HAL_PCA9685_RCOUT_ENABLED) && HAL_PCA9685_RCOUT_ENABLED
+    if (chan >= chan_offset) {
+        const uint8_t local_chan = chan - chan_offset;
+        if (is_pca9685_channel(local_chan)) {
+            return pca9685_rate_hz;
+        }
+    }
+#endif
     // assume 50Hz default
     return 50;
 }
@@ -687,7 +715,16 @@ void RCOutput::enable_ch(uint8_t chan)
     if (grp) {
         en_mask |= 1U << (chan - chan_offset);
         grp->en_mask |= 1U << (chan - chan_offset);
+        return;
     }
+#if HAL_USE_I2C == TRUE && defined(HAL_PCA9685_RCOUT_ENABLED) && HAL_PCA9685_RCOUT_ENABLED
+    if (chan >= chan_offset) {
+        const uint8_t local_chan = chan - chan_offset;
+        if (is_pca9685_channel(local_chan)) {
+            en_mask |= 1U << local_chan;
+        }
+    }
+#endif
 }
 
 void RCOutput::disable_ch(uint8_t chan)
@@ -704,7 +741,23 @@ void RCOutput::disable_ch(uint8_t chan)
         pwmDisableChannel(grp->pwm_drv, i);
         en_mask &= ~(1U<<(chan - chan_offset));
         grp->en_mask &= ~(1U << (chan - chan_offset));
+        return;
     }
+#if HAL_USE_I2C == TRUE && defined(HAL_PCA9685_RCOUT_ENABLED) && HAL_PCA9685_RCOUT_ENABLED
+    if (chan >= chan_offset) {
+        const uint8_t local_chan = chan - chan_offset;
+        const int8_t pca_chan = pca9685_channel_index(local_chan);
+        if (pca_chan >= 0) {
+            en_mask &= ~(1U << local_chan);
+            period[local_chan] = 0;
+            period_corked[local_chan] = 0;
+            if (pca9685_active()) {
+                pca9685.disable_ch(pca_chan);
+                pca9685.push();
+            }
+        }
+    }
+#endif
 }
 
 void RCOutput::write(uint8_t chan, uint16_t period_us)
@@ -747,11 +800,17 @@ void RCOutput::write(uint8_t chan, uint16_t period_us)
         period[chan] = period_us;
     }
 
-    if (chan < num_fmu_channels) {
+    if (is_native_local_channel(chan)) {
         active_fmu_channels = MAX(chan+1, active_fmu_channels);
         if (!corked) {
             push_local();
         }
+    } else {
+#if HAL_USE_I2C == TRUE && defined(HAL_PCA9685_RCOUT_ENABLED) && HAL_PCA9685_RCOUT_ENABLED
+        if (!corked) {
+            push_pca9685();
+        }
+#endif
     }
 }
 
@@ -1368,6 +1427,9 @@ void RCOutput::push(void)
     corked = false;
     memcpy(period, period_corked, sizeof(period));
     push_local();
+#if HAL_USE_I2C == TRUE && defined(HAL_PCA9685_RCOUT_ENABLED) && HAL_PCA9685_RCOUT_ENABLED
+    push_pca9685();
+#endif
 #if HAL_WITH_IO_MCU
     if (iomcu_enabled) {
         iomcu.push();
@@ -2418,6 +2480,11 @@ bool RCOutput::force_safety_on(void)
     }
 #endif
     safety_state = AP_HAL::Util::SAFETY_DISARMED;
+#if HAL_USE_I2C == TRUE && defined(HAL_PCA9685_RCOUT_ENABLED) && HAL_PCA9685_RCOUT_ENABLED
+    if (pca9685_active()) {
+        pca9685.force_safety_on();
+    }
+#endif
     return true;
 }
 
@@ -2433,7 +2500,78 @@ void RCOutput::force_safety_off(void)
     }
 #endif
     safety_state = AP_HAL::Util::SAFETY_ARMED;
+#if HAL_USE_I2C == TRUE && defined(HAL_PCA9685_RCOUT_ENABLED) && HAL_PCA9685_RCOUT_ENABLED
+    if (pca9685_active()) {
+        pca9685.force_safety_off();
+        push_pca9685();
+    }
+#endif
 }
+
+#if HAL_USE_I2C == TRUE && defined(HAL_PCA9685_RCOUT_ENABLED) && HAL_PCA9685_RCOUT_ENABLED
+int8_t RCOutput::pca9685_channel_index(uint8_t local_chan) const
+{
+    if (!pca9685_active() || is_native_local_channel(local_chan)) {
+        return -1;
+    }
+
+    uint8_t pca_idx = 0;
+    for (uint8_t ch = 0; ch <= local_chan; ch++) {
+        if (!is_native_local_channel(ch)) {
+            if (ch == local_chan) {
+                return pca_idx < RCOutput_PCA9685::CHANNEL_COUNT ? (int8_t)pca_idx : -1;
+            }
+            pca_idx++;
+        }
+    }
+    return -1;
+}
+
+uint32_t RCOutput::pca9685_local_mask() const
+{
+    if (!pca9685_active()) {
+        return 0;
+    }
+
+    uint32_t mask = 0;
+    uint8_t assigned = 0;
+    for (uint8_t ch = 0; ch < max_channels && assigned < RCOutput_PCA9685::CHANNEL_COUNT; ch++) {
+        if (!is_native_local_channel(ch)) {
+            mask |= (1U << ch);
+            assigned++;
+        }
+    }
+    return mask;
+}
+
+void RCOutput::push_pca9685()
+{
+    if (!pca9685_active()) {
+        return;
+    }
+
+    const bool safety_on = hal.util->safety_switch_state() == AP_HAL::Util::SAFETY_DISARMED;
+    const uint32_t pca_mask = pca9685_local_mask() & en_mask;
+
+    for (uint8_t local_chan = 0; local_chan < max_channels; local_chan++) {
+        if ((pca_mask & (1U << local_chan)) == 0) {
+            continue;
+        }
+        const int8_t pca_chan = pca9685_channel_index(local_chan);
+        if (pca_chan < 0) {
+            continue;
+        }
+
+        uint16_t period_us = period[local_chan];
+        if (safety_on && !(safety_mask & (1U << (local_chan + chan_offset)))) {
+            period_us = 0;
+        }
+        pca9685.write(pca_chan, period_us);
+    }
+
+    pca9685.push();
+}
+#endif
 
 /*
   update safety state

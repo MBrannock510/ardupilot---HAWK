@@ -1,0 +1,58 @@
+# HAWK real-flight defaults for TMotorH743 + PCA9685
+FRAME_CLASS 18
+FRAME_TYPE 12
+
+# Board serial layout
+# SERIAL3 -> UART3 telemetry transceiver
+SERIAL3_PROTOCOL 2
+SERIAL3_BAUD 57
+# SERIAL5 -> UART5 GNSS
+SERIAL5_PROTOCOL 5
+SERIAL5_BAUD 115
+# SERIAL6 -> UART6 RC transceiver/receiver
+SERIAL6_PROTOCOL 23
+
+# Built-in battery monitor
+BATT_MONITOR 4
+BATT_VOLT_PIN 11
+BATT_CURR_PIN 13
+BATT_VOLT_MULT 11.0
+BATT_AMP_PERVLT 50.0
+
+# Force onboard flash logging even without an SD card
+LOG_BACKEND_TYPE 4
+LOG_DISARMED 3
+LOG_FILE_DSRMROT 1
+
+# Native RC outputs
+SERVO1_FUNCTION 33
+SERVO2_FUNCTION 34
+SERVO3_FUNCTION 35
+SERVO4_FUNCTION 41
+SERVO4_MIN 1000
+SERVO4_TRIM 1500
+SERVO4_MAX 2000
+
+# Native LED output
+SERVO9_FUNCTION 120
+
+# Reserve PCA9685-backed outputs for airframe servos
+# Intended wiring:
+# SERVO5  / PCA0 -> landing leg deploy left
+# SERVO6  / PCA1 -> landing leg deploy right
+# SERVO7  / PCA2 -> tail deploy left
+# SERVO8  / PCA3 -> tail deploy right
+# SERVO10 / PCA4 -> tail actuation left
+# SERVO11 / PCA5 -> tail actuation right
+# SERVO12 / PCA6 -> spare
+SERVO5_FUNCTION 0
+SERVO6_FUNCTION 0
+SERVO7_FUNCTION 0
+SERVO8_FUNCTION 0
+SERVO10_FUNCTION 0
+SERVO11_FUNCTION 0
+SERVO12_FUNCTION 0
+
+# Motor linearisation defaults required by HAWK
+MOT_THST_HOVER 0.35
+MOT_THST_EXPO 0.65

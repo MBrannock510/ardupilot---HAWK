@@ -6,6 +6,7 @@
 #include <AP_Param/AP_Param.h>
 #include <AP_Math/AP_Math.h>
 #include <AP_HawkEncoder/AP_HawkEncoder.h>
+#include <SRV_Channel/SRV_Channel.h>
 
 class AP_MotorsHawk : public AP_MotorsMulticopter
 {
@@ -36,6 +37,7 @@ protected:
     void update_encoder_state();
     bool encoders_healthy() const;
     void set_actuator_safe();
+    void set_pivot_servo_safe();
     float compute_collective_thrust(float throttle_in) const;
     float compute_cyclic_term(uint8_t motor_idx,
                               float theta_rad,
@@ -43,12 +45,18 @@ protected:
                               float pitch_in,
                               float yaw_in) const;
     float apply_output_limits(float in) const;
+    void configure_hardcoded_defaults();
+    void update_pivot_servo(float theta_rad,
+                            float roll_in,
+                            float pitch_in);
+    void send_state_change_debug_if_needed();
+    void send_status_debug_if_due();
+    void log_status_if_due();
+    void log_command_if_needed();
 
     // debug helpers
     void send_debug_text(MAV_SEVERITY severity, const char *fmt, ...) const;
-    void send_encoder_debug_if_due();
     void send_encoder_fault_if_needed();
-    bool use_encoder_simulation() const;
     bool rotor_timing_ready() const;
     bool rotor_timing_ready(uint32_t now_us) const;
     void update_rotation_period(float theta_rad, uint32_t sample_time_us);
@@ -58,6 +66,13 @@ private:
     static constexpr uint8_t HAWK_NUM_MOTORS = 3;
     static constexpr uint32_t ENCODER_TIMEOUT_US = 20000U; // 20 ms
     static constexpr uint8_t ROTATION_HISTORY_LEN = 10;
+    static constexpr uint8_t HAWK_PIVOT_CH = AP_MOTORS_MOT_4;
+    static constexpr SRV_Channel::Function HAWK_PIVOT_FUNCTION = SRV_Channel::k_motor_tilt;
+    static constexpr uint16_t HAWK_PIVOT_PWM_MIN = 1000;
+    static constexpr uint16_t HAWK_PIVOT_PWM_MAX = 2000;
+    static constexpr uint16_t HAWK_PIVOT_PWM_TRIM = 1500;
+    static constexpr int16_t HAWK_PIVOT_PWM_SPAN = 300;
+    static constexpr float HAWK_PIVOT_PHASE_GAIN = 1.5f;
 
     enum MotorIndex : uint8_t {
         MOTOR_HAWK_1 = 0,
@@ -68,7 +83,7 @@ private:
     AP_HawkEncoder _encoders;
 
     float _theta_rad[HAWK_NUM_MOTORS];
-    bool  _encoder_healthy[HAWK_NUM_MOTORS];
+    bool _encoder_healthy;
     float _hawk_out[HAWK_NUM_MOTORS];
 
     AP_Float _cyclic_roll_gain;
@@ -76,7 +91,6 @@ private:
     AP_Float _yaw_gain;
     AP_Float _collective_gain;
     AP_Float _cyclic_max;
-    AP_Int8 _sitl_enc_enable;
 
     AP_Float _phase_roll_deg[HAWK_NUM_MOTORS];
     AP_Float _phase_pitch_deg[HAWK_NUM_MOTORS];
@@ -96,6 +110,16 @@ private:
     // debug state
     uint32_t _last_debug_ms;
     uint32_t _last_fault_ms;
+    uint32_t _last_status_ms;
+    uint32_t _last_command_log_ms;
     bool _sent_init_msg;
     bool _had_encoder_fault;
+    bool _last_armed_state;
+    SpoolState _last_spool_state;
+    float _last_pivot_target_rad;
+    int16_t _last_pivot_pwm;
+    float _last_logged_roll_in;
+    float _last_logged_pitch_in;
+    float _last_logged_yaw_in;
+    float _last_logged_throttle_in;
 };

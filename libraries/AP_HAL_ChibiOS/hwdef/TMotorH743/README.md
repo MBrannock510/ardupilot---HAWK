@@ -56,6 +56,40 @@ Channels within the same group need to use the same output rate. If
 any channel in a group uses DShot then all channels in the group need
 to use DShot. Channels 1-4 support bi-directional dshot.
 
+## HAWK Wiring
+
+For the HAWK real-flight configuration in this tree, the board is wired as follows:
+
+- `SERVO1` / `M1` -> HAWK motor 1 ESC
+- `SERVO2` / `M2` -> HAWK motor 2 ESC
+- `SERVO3` / `M3` -> HAWK motor 3 ESC
+- `SERVO4` / `M4` -> blade pivot continuous-rotation servo
+- `SERVO9` / `M9` -> LED output
+
+Additional servo outputs are provided by a PCA9685 on `I2C1` at address `0x40`:
+
+- `SERVO5` -> PCA9685 channel 0 -> landing leg deploy left
+- `SERVO6` -> PCA9685 channel 1 -> landing leg deploy right
+- `SERVO7` -> PCA9685 channel 2 -> tail deploy left
+- `SERVO8` -> PCA9685 channel 3 -> tail deploy right
+- `SERVO10` -> PCA9685 channel 4 -> tail actuation left
+- `SERVO11` -> PCA9685 channel 5 -> tail actuation right
+- `SERVO12` -> PCA9685 channel 6 -> spare
+- `SERVO13-21` -> PCA9685 channels 7-15
+
+The current board defaults reserve these PCA9685-backed outputs so they stay
+available for landing gear, tail deployment, and tail actuation hardware.
+
+Recommended peripheral wiring for this setup:
+
+- `UART3` / `TX3`,`RX3` -> telemetry transceiver
+- `UART5` / `TX5`,`RX5` -> GNSS
+- `UART6` / `TX6`,`RX6` -> RC transceiver/receiver
+- `I2C1` / `SCL`,`SDA` -> PCA9685 and AS5600 rotor encoder
+
+Because the board has only one external I2C bus, the PCA9685, AS5600 encoder,
+and any I2C compass share `I2C1`.
+
 ## Battery Monitoring
 
 The board has a built-in voltage and current sensor. The current
