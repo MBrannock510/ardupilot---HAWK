@@ -44,7 +44,9 @@ private:
     uint16_t _frequency = 50;
     uint16_t _pulse_buffer[CHANNEL_COUNT] {};
     uint16_t _pending_write_mask = 0;
+    bool _hw_initialised = false;
 
+    bool ensure_initialised();
     void reset_all_channels();
 };
 

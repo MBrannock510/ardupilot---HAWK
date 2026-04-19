@@ -18,10 +18,23 @@ void RCOutput_PCA9685::init(uint8_t bus, uint8_t address)
         return;
     }
     _dev->set_retries(3);
+    _hw_initialised = false;
+}
+
+bool RCOutput_PCA9685::ensure_initialised()
+{
+    if (!_dev) {
+        return false;
+    }
+    if (_hw_initialised) {
+        return true;
+    }
 
     reset_all_channels();
-    set_freq(50);
+    set_freq(_frequency);
     force_safety_off();
+    _hw_initialised = true;
+    return true;
 }
 
 void RCOutput_PCA9685::reset_all_channels()
@@ -42,6 +55,11 @@ void RCOutput_PCA9685::set_freq(uint16_t freq_hz)
     }
 
     freq_hz = constrain_int16(freq_hz, 24, 400);
+    _frequency = freq_hz;
+
+    if (!_hw_initialised) {
+        return;
+    }
 
     WITH_SEMAPHORE(_dev->get_semaphore());
 
@@ -66,7 +84,7 @@ void RCOutput_PCA9685::write(uint8_t ch, uint16_t period_us)
 
 void RCOutput_PCA9685::push()
 {
-    if (!_dev || _pending_write_mask == 0) {
+    if (!_dev || _pending_write_mask == 0 || !ensure_initialised()) {
         return;
     }
 
@@ -102,7 +120,7 @@ void RCOutput_PCA9685::push()
 
 bool RCOutput_PCA9685::force_safety_on()
 {
-    if (!_dev) {
+    if (!_dev || !_hw_initialised) {
         return false;
     }
     WITH_SEMAPHORE(_dev->get_semaphore());

@@ -63,6 +63,7 @@ protected:
     float compute_predicted_theta(uint32_t now_us) const;
 
 private:
+    static constexpr const char *HAWK_FW_VERSION = "HAWK v0.1.0";
     static constexpr uint8_t HAWK_NUM_MOTORS = 3;
     static constexpr uint32_t ENCODER_TIMEOUT_US = 20000U; // 20 ms
     static constexpr uint8_t ROTATION_HISTORY_LEN = 10;

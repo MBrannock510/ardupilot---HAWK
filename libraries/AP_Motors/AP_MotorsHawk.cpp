@@ -187,9 +187,11 @@ void AP_MotorsHawk::init(motor_frame_class frame_class,
 
     if (!_sent_init_msg) {
         send_debug_text(MAV_SEVERITY_INFO,
-                        "HAWK init frame=%u ok=%u",
+                        "%s init frame=%u ok=%u",
+                        HAWK_FW_VERSION,
                         (unsigned)frame_class,
                         (unsigned)ok);
+        send_debug_text(MAV_SEVERITY_INFO, "%s custom build booted", HAWK_FW_VERSION);
         _sent_init_msg = true;
     }
 }
@@ -251,11 +253,11 @@ void AP_MotorsHawk::set_frame_class_and_type(motor_frame_class frame_class,
     SRV_Channels::set_rc_frequency(HAWK_PIVOT_FUNCTION, 50);
     SRV_Channels::set_angle(HAWK_PIVOT_FUNCTION, 1);
 
-    send_debug_text(MAV_SEVERITY_INFO, "HAWK frame configured");
+    send_debug_text(MAV_SEVERITY_INFO, "%s frame configured", HAWK_FW_VERSION);
     if (_encoders_initialized) {
-        send_debug_text(MAV_SEVERITY_INFO, "HAWK encoder ready bus=0 addr=0x36");
+        send_debug_text(MAV_SEVERITY_INFO, "%s encoder ready bus=0 addr=0x36", HAWK_FW_VERSION);
     } else {
-        send_debug_text(MAV_SEVERITY_ERROR, "HAWK encoder init failed bus=0 addr=0x36");
+        send_debug_text(MAV_SEVERITY_ERROR, "%s encoder init failed bus=0 addr=0x36", HAWK_FW_VERSION);
     }
 }
 
@@ -519,7 +521,8 @@ void AP_MotorsHawk::send_status_debug_if_due()
     const float receiver_rssi = (rssi_backend != nullptr) ? rssi_backend->read_receiver_rssi() : -1.0f;
 
     send_debug_text(MAV_SEVERITY_INFO,
-                    "HAWK st arm=%u sp=%u enc=%u tim=%u gps=%u sat=%u V=%.2f I=%.1f rssi=%.2f",
+                    "%s st arm=%u sp=%u enc=%u tim=%u gps=%u sat=%u V=%.2f I=%.1f rssi=%.2f",
+                    HAWK_FW_VERSION,
                     (unsigned)armed(),
                     (unsigned)_spool_state,
                     (unsigned)_encoder_healthy,
